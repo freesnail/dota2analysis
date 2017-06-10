@@ -14,6 +14,7 @@ HERO_ID_BASE = 0
 HERO_ID_LAST = 113
 WIN = 0
 LOSE = 0
+HERO_WINNING_RATE = {heroid: [0, 0] for heroid in range(HERO_ID_BASE, HERO_ID_LAST)}
 
 api = dota2api.Initialise("0FC7F27CF84F15C2492359A7D52C10BC")
 
