@@ -11,38 +11,52 @@ logger = logging.getLogger("main")
 
 ACCOUNT_FILE = 0
 HERO_ID_BASE = 0
-HERO_ID_LAST = 113
-WIN = 0
-LOSE = 0
+HERO_ID_LAST = 115
+MATCHES_REQUESTED = 100
+RECENT_VALID_MATCH_ID = 3017815676 
+CAMP_RADIANT = 0
+CAMP_DIRE = 1
 HERO_WINNING_RATE = {heroid: [0, 0] for heroid in range(HERO_ID_BASE, HERO_ID_LAST)}
 
 api = dota2api.Initialise("0FC7F27CF84F15C2492359A7D52C10BC")
 
 def get_player_camp (slot):
     if slot in range (0, 5):
-        return "Radiant"
+        return CAMP_RADIANT
     else:
-        return "Dire"
+        return CAMP_DIRE
 
-def process_player_match (result, account):
-    global WIN
-    global LOSE
-    rate = 0
+def process_hero_result(hero_id, hero_camp, radiant_win):
+    global HERO_WINNING_RATE
+    if radiant_win:
+        if hero_camp == CAMP_RADIANT:
+            HERO_WINNING_RATE[hero_id][0] += 1
+        else: 
+            HERO_WINNING_RATE[hero_id][1] += 1
+    else:
+        if hero_camp == CAMP_DIRE:
+            HERO_WINNING_RATE[hero_id][0] += 1
+        else: 
+            HERO_WINNING_RATE[hero_id][1] += 1
+
+def is_AI_match(match):
+    if match["human_players"] < 10:
+        return True
+    else:
+        return False
+
+def process_matches (result):
     for i in range (0, int(result["num_results"]) - 1):
-        match = api.get_match_details(match_id = result["matches"][i]["match_id"])
-        for i in range (0, 10):
-            if int(match["players"][i]["account_id"]) == account:
-                camp = get_player_camp (match["players"][i]["player_slot"])
-                if camp == "Radiant" and match["radiant_win"]:
-                    WIN += 1;
-                elif camp == "Dire" and not match["radiant_win"]:
-                    WIN += 1;
-                else:
-                    LOSE += 1;
-                break;
-        rate = float(WIN/(WIN + LOSE))
-        logging.debug ("win %d lose %d win rate %f" % (WIN, LOSE, rate))
-    return rate 
+        matchid = result["matches"][i]["match_id"] 
+        match = api.get_match_details(match_id = matchid)
+        if is_AI_match (match):
+            continue
+        if match:
+            for i in range(0, 10):
+                hero_id = match["players"][i]["hero_id"]
+                camp = get_player_camp(match["players"][i]["player_slot"])
+                process_hero_result (hero_id, camp, match["radiant_win"])
+    return 0
 
 def open_account_file():
     global ACCOUNT_FILE
@@ -59,33 +73,27 @@ def open_account_file():
 def close_account_file(account_file):
     ACCOUNT_FILE.close()
 
-def get_hero_winning_rate (heroid):
-    global WIN 
-    global LOSE
-    WIN = LOSE = 0
-    while True:
-        line = ACCOUNT_FILE.readline()
-        if not line:
-            break
-        else:
-            account = int(line)
-            logging.debug ("processing account: %s" % line)
-            result = api.get_match_history(account_id = account, hero_id = heroid, start_at_match_id = 3017815676)
-            if int (result["num_results"]) > 0:
-                rate = process_player_match(result, account)
-    return rate
-
+def process_account_match(account):
+    logging.debug ("processing account: %d" % account)
+    result = api.get_match_history(account_id = account, start_at_match_id = RECENT_VALID_MATCH_ID)
+    rate = process_matches(result)
 
 def main():
-
     if open_account_file() < 0:
         return -1
 
-    for heroid in range(HERO_ID_BASE, HERO_ID_LAST):
-        ACCOUNT_FILE.seek(0, os.SEEK_SET)
-        logging.debug("start process hero id %d" % heroid)
-        rate = get_hero_winning_rate(heroid)
-        logging.info("hero id %d, winning rate %f" % (heroid, rate))
+    while True:
+        line = ACCOUNT_FILE.readline()
+        if not line:
+            logging.info("finished all accounts processing")
+            return 0
+        else:
+            account = int(line)
+            process_account_match(account)
+            print HERO_WINNING_RATE
+
+    close_account_file(ACCOUNT_FILE)
+
     return 0
 
 if __name__ == "__main__":
