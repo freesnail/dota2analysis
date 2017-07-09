@@ -36,6 +36,9 @@ lock = threading.Lock()
 DB = pymysql.connect("localhost","root","123456", "dota2")
 cursor = DB.cursor()
 
+dic_sql_matches = {NORMAL:"matches_normal", HIGH:"matches_high", VERY_HIGH:"matches_veryhigh"}
+dic_sql_games = {NORMAL:"games_normal", HIGH:"games_high", VERY_HIGH:"games_veryhigh"}
+
 #watcher to response keybord interrupt
 class Watcher():  
     def __init__(self):  
@@ -68,17 +71,24 @@ def get_player_camp (slot):
         return CAMP_DIRE
 
 def process_hero_result(hero_id, hero_camp, radiant_win, level):
-    global HERO_WINNING_RATE
-    if radiant_win:
-        if hero_camp == CAMP_RADIANT:
-            HERO_WINNING_RATE[hero_id][0] += 1
-        else: 
-            HERO_WINNING_RATE[hero_id][1] += 1
+    if (radiant_win == True and hero_camp == CAMP_RADIANT) or (radiant_win == False and hero_camp == CAMP_DIRE):
+        sql_update = "UPDATE %s SET win = win + 1 WHERE hero_id = %d" % (dic_sql_games[level], hero_id)
     else:
-        if hero_camp == CAMP_DIRE:
-            HERO_WINNING_RATE[hero_id][0] += 1
-        else: 
-            HERO_WINNING_RATE[hero_id][1] += 1
+        sql_update = "UPDATE %s SET lose = lose + 1 WHERE hero_id = %d" % (dic_sql_games[level], hero_id)
+    print (sql_update)
+    lock.acquire()
+    try:
+        cursor.execute(sql_update)
+        DB.commit()
+        ret = True
+    except:
+        DB.rollback()
+        ret = False
+        logging.error ("Error happens while update hero_result")
+    finally:
+        lock.release()
+
+    return ret
 
 def is_AI_match(match):
     if match["human_players"] < 10:
@@ -86,51 +96,95 @@ def is_AI_match(match):
     else:
         return False
 
-def match_processed(match_id):
-    sql = "INSERT IGNORE INTO matches (match_id) VALUES (%d)" % (match_id)
+def match_processed(match_id, level):
+    ret = False
+    sql_query = "SELECT * FROM %s WHERE match_id = '%d'" % (dic_sql_matches[level], match_id)
+    lock.acquire()
     try:
-        cursor.execute(sql)
+        cursor.execute(sql_query)
+        result = cursor.fetchone()
+        if result == None:
+            ret = False
+        else:
+            ret = True
+    except:
+        print (sql_query)
+        logging.error ("Error happens while query match_id: %d" % (match_id))
+    finally:
+        lock.release()
+
+    return ret
+
+def sql_insert_match(match_id, level):
+    sql_insert = "INSERT INTO %s(match_id) VALUES(%d)" % (dic_sql_matches[level], match_id)
+    lock.acquire()
+    try:
+        cursor.execute(sql_insert)
         DB.commit()
+        ret = True
     except:
         DB.rollback()
+        ret = False
+        logging.error ("Error happens while insert match_id: %d" % (match_id))
+    finally:
+        lock.release()
 
-    return False
+    return ret
+
+def process_game_result(match, level):
+    ret = False
+    for i in range(0, 10):
+        hero_id = match["players"][i]["hero_id"]
+        camp = get_player_camp(match["players"][i]["player_slot"])
+        ret = process_hero_result (hero_id, camp, match["radiant_win"], level)
+        if ret == False:
+            break
+
+    return ret
 
 def process_matches (result, level):
     print (result["num_results"], level)
+    ret = False
     for i in range (0, int(result["num_results"])):
         match_id = (int)(result["matches"][i]["match_id"])
         print (match_id)
-        if not match_processed(match_id):
-            match = api.get_match_details(match_id = match_id)
+        if (match_processed (match_id, level) == False):
+            try:
+                match = api.get_match_details(match_id = match_id)
+            except:
+                logging.warning ("Connection error while fetching match details, continue")
+                continue
             if is_AI_match (match):
                 continue
             if match:
-                for i in range(0, 10):
-                    hero_id = match["players"][i]["hero_id"]
-                    camp = get_player_camp(match["players"][i]["player_slot"])
-                    lock.acquire()
-                    try:
-                        process_hero_result (hero_id, camp, match["radiant_win"], level)
-                    finally:
-                        lock.release()
-    return 0
+                if (process_game_result(match, level)):
+                    ret = sql_insert_match(match_id, level)
+        else:
+            logging.debug ("match %d is processed" % (match_id))
+    return ret
 
 def process_level_match (level):
-    result = api.get_match_history (skill = level, matches_requested = 50)
-    process_matches (result, level);
+    #while (True):
+    result = None
+    try:
+        result = api.get_match_history (skill = level, matches_requested = 5)
+    except:
+        logging.warning ("Connection error while fetching matches")
+        time.sleep(1)
+    finally:
+        if (result != None and result["num_results"] > 0):
+            process_matches (result, level)
+        
     logging.debug ("finished processing level: %d" % level)
+    return 0
 
 def main():
-
     pool = ThreadPool()
-
     results = pool.map(process_level_match, LEVEL)
-
     pool.close() 
     pool.join()
+    cursor.close()
     DB.close()
-    #print (HERO_WINNING_RATE)
     return 0
 
 if __name__ == "__main__":
