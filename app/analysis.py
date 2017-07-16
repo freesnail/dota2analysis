@@ -164,18 +164,19 @@ def process_matches (result, level):
     return ret
 
 def process_level_match (level):
-    #while (True):
-    result = None
-    try:
-        result = api.get_match_history (skill = level, matches_requested = 5)
-    except:
-        logging.warning ("Connection error while fetching matches")
-        time.sleep(1)
-    finally:
-        if (result != None and result["num_results"] > 0):
-            process_matches (result, level)
-        
-    logging.debug ("finished processing level: %d" % level)
+    while (True):
+        result = None
+        try:
+            result = api.get_match_history (skill = level, matches_requested = 100)
+        except:
+            logging.warning ("Connection error while fetching matches")
+            time.sleep(1)
+        finally:
+            if (result != None and result["num_results"] > 0):
+                process_matches (result, level)
+            
+        logging.debug ("finished processing level: %d" % level)
+        time.sleep(5);
     return 0
 
 def main():
